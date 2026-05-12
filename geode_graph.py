@@ -71,7 +71,6 @@ from llama_index.core.indices.property_graph import (
 from llama_index.core.schema import NodeWithScore, TextNode, Document
 from llama_index.llms.ollama import Ollama
 from llama_index.embeddings.ollama import OllamaEmbedding
-from llama_index.core.node_parser import SentenceSplitter
 
 # Multilingual module
 from lang_config import (
@@ -96,45 +95,43 @@ WATCHER_VALID_EXTENSIONS = {".md", ".txt", ".pdf", ".docx"}
 
 logging.basicConfig(level=logging.ERROR)
 
-Settings.llm = Ollama(
-    model=MODEL_NAME,
-    request_timeout=300.0,
-    base_url="http://localhost:11434",
-)
-Settings.embed_model = OllamaEmbedding(model_name=EMBED_MODEL)
 
-# Chunking: large chunks to avoid splitting small notes
-Settings.chunk_size = 2048
-Settings.chunk_overlap = 256
+def _init_llm(model_name: str = MODEL_NAME, embed_model: str = EMBED_MODEL):
+    """Initialize LLM and embedding model. Called from main() to avoid side effects on import."""
+    Settings.llm = Ollama(
+        model=model_name,
+        request_timeout=300.0,
+        base_url="http://localhost:11434",
+    )
+    Settings.embed_model = OllamaEmbedding(model_name=embed_model)
+
+    # Chunking: large chunks to avoid splitting small notes
+    Settings.chunk_size = 2048
+    Settings.chunk_overlap = 256
 
 # ==========================================
 # SYSTEM PROMPT (multilingual)
 # ==========================================
 SYSTEM_PROMPT = (
-    "You are the advanced research assistant of Geode Graph. Your task is to analyze files "
-    "in the knowledge_base folder and answer based exclusively on the graph relationships.\n\n"
-    "STRICT RULES (NEVER VIOLATE):\n"
-    "1. Use ONLY information explicitly written in the provided context. Do NOT add, infer, "
-    "or invent any detail that is not directly stated in the documents.\n"
-    "2. If the answer involves multiple files, explain how they are related.\n"
-    "3. Always cite original file names in square brackets (e.g. [document.md]).\n"
-    "4. If you cannot find the answer in the graph, say: "
-    "'I don't have enough information in your local files'.\n"
-    "5. Be precise, technical but concise.\n"
-    "6. ALWAYS respond in the same language as the user's question.\n"
-    "7. When quoting actions or facts, use the EXACT wording from the source documents. "
-    "Do NOT paraphrase in a way that changes the meaning.\n"
-    "8. If a document says someone WILL do something, do NOT say they already did it or "
-    "should cancel it. Report the action exactly as described.\n"
-    "9. If you are unsure about a detail, omit it rather than guessing.\n"
-    "10. Be THOROUGH: include ALL relevant information found in the context. "
-    "Do not omit facts that are clearly stated in the documents. "
-    "A complete answer with all cited facts is better than a short one.\n"
-    "11. When the user asks what to do BEFORE an event, include ALL tasks, preparations, "
-    "purchases, and actions related to that event — not only those explicitly marked with a deadline.\n\n"
-    "CONTEXT AND GRAPH RELATIONSHIPS:\n"
+    "You are the research assistant of Geode Graph. Your task is to answer questions "
+    "based exclusively on the provided context from the user's knowledge base.\n\n"
+    "RULES:\n"
+    "1. Use ONLY information explicitly stated in the context below. Never invent or assume facts.\n"
+    "2. Be concise but complete: include every relevant fact found in the context. "
+    "Do not omit cited information that answers the question.\n"
+    "3. If the answer involves multiple files, state which files are involved and "
+    "quote the connecting fact from each.\n"
+    "4. Always cite source file names in square brackets (e.g. [document.md]).\n"
+    "5. When quoting actions or facts, preserve the original meaning. "
+    "If a document says someone WILL do something, report it as a future action.\n"
+    "6. When the user asks what to do BEFORE an event, include ALL tasks, preparations, "
+    "and actions related to that event.\n"
+    "7. If you cannot find the answer, say: 'I don't have enough information in your local files.'\n"
+    "8. If unsure about a detail, omit it rather than guessing.\n"
+    "9. ALWAYS respond in the same language as the user's question.\n\n"
+    "CONTEXT:\n"
     "{context_str}\n\n"
-    "USER QUESTION: {query_str}"
+    "QUESTION: {query_str}"
 )
 
 qa_template = PromptTemplate(SYSTEM_PROMPT)
@@ -374,8 +371,13 @@ _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 
 def parse_frontmatter(text: str) -> tuple[dict, str]:
-    """Extract YAML frontmatter and return (metadata_dict, body_text)."""
-    match = _FRONTMATTER_RE.match(text)
+    """Extract YAML frontmatter and return (metadata_dict, body_text).
+
+    Handles BOM and leading whitespace that some editors add on Windows.
+    """
+    # Strip BOM and leading whitespace before matching
+    text_clean = text.lstrip("\ufeff").lstrip()
+    match = _FRONTMATTER_RE.match(text_clean)
     if not match:
         return {}, text
     try:
@@ -384,7 +386,11 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
             meta = {}
     except yaml.YAMLError:
         meta = {}
-    body = text[match.end() :]
+    # Calculate body offset relative to original text
+    offset_in_clean = match.end()
+    # Find where text_clean starts in original text
+    prefix_len = len(text) - len(text.lstrip("\ufeff").lstrip())
+    body = text[prefix_len + offset_in_clean:]
     return meta, body
 
 
@@ -574,6 +580,8 @@ class WritHerGraphRAG:
         try:
             try:
                 if os.path.exists(STORAGE_DIR) and os.listdir(STORAGE_DIR):
+                    # P1.4: Check embed model compatibility
+                    self._check_storage_compatibility()
                     safe_print("Loading knowledge graph from local storage...")
                     storage_context = StorageContext.from_defaults(
                         persist_dir=STORAGE_DIR
@@ -588,6 +596,57 @@ class WritHerGraphRAG:
             self._retrievers_dirty = True
         finally:
             self._rw_lock.release_write()
+
+    def _check_storage_compatibility(self):
+        """Verify that stored graph was built with the same embedding model.
+
+        Raises RuntimeError if embed model mismatch is detected.
+        """
+        import json as _json
+
+        meta_path = os.path.join(STORAGE_DIR, ".kwipu_meta.json")
+        if not os.path.exists(meta_path):
+            return  # Legacy storage without manifest, allow loading
+
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = _json.load(f)
+        except (OSError, _json.JSONDecodeError):
+            return
+
+        stored_embed = meta.get("embed_model", "")
+        current_embed = EMBED_MODEL
+
+        if stored_embed and stored_embed != current_embed:
+            raise RuntimeError(
+                f"Embedding model mismatch: storage was built with '{stored_embed}' "
+                f"but current config uses '{current_embed}'. "
+                f"Delete '{STORAGE_DIR}/' to rebuild, or restore the previous model."
+            )
+
+        # LLM model change is fine (only used for generation, not embeddings)
+        stored_llm = meta.get("llm_model", "")
+        if stored_llm and stored_llm != MODEL_NAME:
+            safe_print(
+                f"[dim]Note: graph was built with '{stored_llm}', "
+                f"now using '{MODEL_NAME}' for queries.[/dim]"
+            )
+
+    def _save_storage_manifest(self):
+        """Save metadata about the current build configuration."""
+        import json as _json
+
+        meta_path = os.path.join(STORAGE_DIR, ".kwipu_meta.json")
+        meta = {
+            "embed_model": EMBED_MODEL,
+            "llm_model": MODEL_NAME,
+            "version": "1.0",
+        }
+        try:
+            with open(meta_path, "w", encoding="utf-8") as f:
+                _json.dump(meta, f, indent=2)
+        except OSError:
+            pass
 
     def build_index(self):
         """Rebuild the graph (thread-safe with write lock)."""
@@ -735,6 +794,7 @@ class WritHerGraphRAG:
         self._inject_structural_triples(structural_triples)
 
         self.index.storage_context.persist(persist_dir=STORAGE_DIR)
+        self._save_storage_manifest()
         build_elapsed = time.time() - build_start
         minutes = int(build_elapsed // 60)
         seconds = int(build_elapsed % 60)
@@ -801,17 +861,20 @@ class WritHerGraphRAG:
         self._retrievers_dirty = False
 
     def ask(self, question):
-        """Query the graph with read lock."""
+        """Query the graph with read lock.
+
+        Uses a lock-upgrade pattern: acquire read to check state, release,
+        then acquire write only if retrievers need rebuilding, then read again for query.
+        """
         self._rw_lock.acquire_read()
         try:
             if not self.index:
-                return "Indice non disponibile. Aggiungi dei file nella cartella knowledge_base."
-            if self._retrievers_dirty:
-                pass
+                return "No index available. Add files to the knowledge_base folder."
+            needs_rebuild = self._retrievers_dirty
         finally:
             self._rw_lock.release_read()
 
-        if self._retrievers_dirty:
+        if needs_rebuild:
             self._rw_lock.acquire_write()
             try:
                 if self._retrievers_dirty:
@@ -822,7 +885,7 @@ class WritHerGraphRAG:
         self._rw_lock.acquire_read()
         try:
             if not self._query_engine:
-                return "Indice non disponibile. Aggiungi dei file nella cartella knowledge_base."
+                return "No index available. Add files to the knowledge_base folder."
             response = self._query_engine.query(question)
             return response
         finally:
@@ -875,7 +938,7 @@ class FileWatcher(FileSystemEventHandler):
     def __init__(self, rag_system):
         self.rag_system = rag_system
         self._lock = threading.Lock()
-        self._pending_events = defaultdict(float)
+        self._pending_events: dict[str, tuple[str, float]] = {}
         self._timer = None
         # Persistent hash cache on disk
         self._file_hashes: dict[str, str] = _load_hash_cache()
@@ -987,6 +1050,64 @@ class FileWatcher(FileSystemEventHandler):
 # ==========================================
 # TERMINAL INTERFACE (Rich)
 # ==========================================
+def _check_ollama_available(model_name: str, embed_model: str):
+    """Verify Ollama is running and required models are available.
+
+    Prints clear error messages with suggested commands if something is missing.
+    Returns True if everything is ready, False otherwise.
+    """
+    import urllib.request
+    import json as _json
+
+    base_url = "http://localhost:11434"
+
+    # Check if Ollama is running
+    try:
+        req = urllib.request.Request(f"{base_url}/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = _json.loads(resp.read().decode())
+    except Exception:
+        console.print(
+            Panel(
+                "[bold red]Ollama is not running.[/bold red]\n\n"
+                "Start Ollama before running Geode Graph:\n"
+                "  [dim]ollama serve[/dim]",
+                title="[red]Connection Error[/red]",
+                border_style="red",
+            )
+        )
+        return False
+
+    # Check available models
+    available_models = set()
+    for model_info in data.get("models", []):
+        name = model_info.get("name", "")
+        available_models.add(name)
+        # Also add without tag (e.g. "qwen2.5:3b" -> "qwen2.5")
+        if ":" in name:
+            available_models.add(name.split(":")[0])
+
+    missing = []
+    if model_name not in available_models and model_name.split(":")[0] not in available_models:
+        missing.append(model_name)
+    if embed_model not in available_models and embed_model.split(":")[0] not in available_models:
+        missing.append(embed_model)
+
+    if missing:
+        cmds = "\n".join(f"  [dim]ollama pull {m}[/dim]" for m in missing)
+        console.print(
+            Panel(
+                f"[bold yellow]Missing model(s):[/bold yellow] {', '.join(missing)}\n\n"
+                f"Pull them with:\n{cmds}",
+                title="[yellow]Model Not Found[/yellow]",
+                border_style="yellow",
+            )
+        )
+        return False
+
+    return True
+
+
 def main():
     import argparse
 
@@ -996,16 +1117,39 @@ def main():
         action="store_true",
         help="Fast mode: disables LLM synonym retriever for faster queries",
     )
+    parser.add_argument(
+        "--llm-model",
+        type=str,
+        default=None,
+        help=f"Override LLM model (default: {MODEL_NAME})",
+    )
+    parser.add_argument(
+        "--embed-model",
+        type=str,
+        default=None,
+        help=f"Override embedding model (default: {EMBED_MODEL})",
+    )
     args = parser.parse_args()
 
+    # Resolve model names (CLI overrides config)
+    llm_model = args.llm_model or MODEL_NAME
+    embed_model = args.embed_model or EMBED_MODEL
+
     _ensure_nest_asyncio()
+
+    # Check Ollama before doing anything expensive
+    if not _check_ollama_available(llm_model, embed_model):
+        sys.exit(1)
+
+    # Initialize LLM (P0.6: no side effects on import)
+    _init_llm(model_name=llm_model, embed_model=embed_model)
 
     console.print()
     console.print(
         Panel(
             Text.from_markup(
                 f"[bold]Geode Graph[/bold]\n"
-                f"[dim]LLM:[/dim] {MODEL_NAME}  "
+                f"[dim]LLM:[/dim] {llm_model}  "
                 f"[dim]Mode:[/dim] {'FAST' if args.fast else 'FULL'}  "
                 f"[dim]Watching:[/dim] {KNOWLEDGE_DIR}"
             ),

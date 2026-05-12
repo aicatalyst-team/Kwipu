@@ -1,10 +1,10 @@
-# Kwipu (geode_graph project)
+# Kwipu
 
 A local Graph RAG system that turns your markdown notes into a queryable knowledge graph. Ask questions in natural language and get answers that connect information across multiple files.
 
 Built for [Obsidian](https://obsidian.md/) vaults but works with any folder of markdown files.
 
-![Geode Graph in action](img/screen.png)
+![Kwipu in action](img/screen.png)
 
 ![Query response example](img/screen_2.png)
 
@@ -18,9 +18,12 @@ Built for [Obsidian](https://obsidian.md/) vaults but works with any folder of m
   - Vector similarity search
   - BM25 keyword scoring
   - Temporal/metadata matching
-- **Real-time sync** — watches your folder for changes and updates the graph automatically
+- **Real-time sync** — watches your folder for changes and updates the graph incrementally
 - **Anti-hallucination prompt** — strict instructions to cite sources and avoid inventing facts
 - **Fully local** — runs on Ollama, no data leaves your machine
+- **Startup checks** — verifies Ollama is running and models are available before starting
+- **Storage validation** — detects embedding model mismatches to prevent silent corruption
+- **CLI model override** — switch models without editing code via `--llm-model` and `--embed-model`
 
 ## Requirements
 
@@ -40,23 +43,25 @@ ollama pull llama3.1:8b
 ollama pull nomic-embed-text
 ```
 
-Edit `geode_graph.py` to set your model:
-
-```python
-MODEL_NAME = "llama3.1:8b"  # or any model available in Ollama
-```
-
 ## Usage
 
 ```bash
-# Full mode (all retrievers, best quality)
+# Full mode (default, all retrievers)
 python geode_graph.py
 
-# Fast mode (skips LLM synonym retriever, ~50% faster per query on CPU)
+# Fast mode (skips LLM synonym retriever, faster queries)
 python geode_graph.py --fast
+
+# Override models from CLI (no need to edit the file)
+python geode_graph.py --llm-model qwen2.5:7b --embed-model nomic-embed-text
+
+# Build with cloud model, then query with local model
+python geode_graph.py --llm-model gpt-oss:20b-cloud
+# After build completes, restart with:
+python geode_graph.py --llm-model qwen2.5:3b --fast
 ```
 
-Place your markdown files in `./knowledge_base/` (or change `KNOWLEDGE_DIR` in the config). The system will build the graph on first run and watch for changes.
+Place your markdown files in `./knowledge_base/` (or change `KNOWLEDGE_DIR` in the config). The system builds the graph on first run and watches for changes.
 
 ## How It Works
 
@@ -66,7 +71,7 @@ Your Notes (.md)
       ▼
 ┌─────────────────────┐
 │   Pre-processing    │  ← Extracts [[wikilinks]], YAML frontmatter
-│   (lang_config.py)  │  ← Infers relations from context
+│   (lang_config.py)  │  ← Infers relations from context (multilingual)
 └─────────┬───────────┘
           │
           ▼
@@ -115,26 +120,26 @@ The system reads files without modifying them. It ignores `.obsidian/` configura
 
 ## Model Recommendations
 
-| Model | RAM (Q4) | Quality | Speed (CPU) | Speed (GPU) |
-|-------|----------|---------|-------------|-------------|
-| 1B    | ~2 GB    | Basic   | ~8s         | ~2s         |
-| 3B    | ~3 GB    | Good    | ~60s        | ~8s         |
-| 7-8B  | ~5-6 GB  | Great   | ~300s       | ~15-25s     |
-| 20B   | ~12 GB   | Best    | N/A         | ~15s        |
+| Model | RAM (Q4) | Quality | Speed per query (CPU) | Speed per query (GPU) |
+|-------|----------|---------|----------------------|----------------------|
+| 1B    | ~2 GB    | Basic   | ~8s                  | ~2s                  |
+| 3B    | ~3 GB    | Good    | ~30-60s              | ~5-8s                |
+| 7-8B  | ~5-6 GB  | Great   | ~2-5 min             | ~15-25s              |
+| 20B   | ~12 GB   | Best    | Not practical        | ~15s                 |
 
-For serious use, 7B+ with a GPU is the sweet spot.
+For serious use, 7B+ with a GPU is the sweet spot. The 3B is a good compromise for CPU-only setups.
 
 ## Build Time Estimates
 
-First-time graph construction requires an LLM call for each document chunk. Subsequent runs load the graph from disk instantly.
+First-time graph construction requires an LLM call for each document chunk. Subsequent runs load the graph from disk instantly. Times can vary ±2x depending on note length and model.
 
 | Notes | GPU (7B) | CPU (7B) | CPU (3B) |
 |-------|----------|----------|----------|
-| 5     | ~2 min   | ~5 min   | ~3 min   |
-| 20    | ~7 min   | ~20 min  | ~10 min  |
-| 50    | ~17 min  | ~50 min  | ~25 min  |
-| 100   | ~35 min  | ~100 min | ~50 min  |
-| 500+  | ~3 hrs   | Not recommended | ~4 hrs |
+| 5     | ~2 min   | ~8 min   | ~4 min   |
+| 20    | ~8 min   | ~30 min  | ~15 min  |
+| 50    | ~20 min  | ~1.5 hrs | ~40 min  |
+| 100   | ~40 min  | ~3 hrs   | ~1.5 hrs |
+| 500+  | ~3 hrs   | Not recommended | Not recommended |
 
 Adding a single new file is incremental (~20-60s) and does not rebuild the full graph.
 
@@ -144,8 +149,8 @@ Adding a single new file is incremental (~20-60s) and does not rebuild the full 
 |-----------|-----|-------|
 | Ollama (LLM) | 2-14 GB | Depends on model size and quantization |
 | Ollama (embeddings) | ~300 MB | nomic-embed-text |
-| Geode Graph (indexing) | 0.5-4 GB | Depends on number of notes |
-| Geode Graph (queries) | 200-500 MB | After graph is built |
+| Kwipu (indexing) | 0.5-4 GB | Depends on number of notes |
+| Kwipu (queries) | 200-500 MB | After graph is built |
 | **Total (7B Q4)** | **~8-12 GB** | **Recommended minimum: 16 GB system RAM** |
 
 ## Tip: Use Cloud Models for Graph Building
@@ -154,20 +159,20 @@ If your hardware is limited, you can use a powerful cloud model via Ollama to bu
 
 ```bash
 # Step 1: Build the graph with a cloud model (one-time, high quality extraction)
-# Edit MODEL_NAME = "gpt-oss:20b-cloud" in geode_graph.py, then run:
-python geode_graph.py
+python geode_graph.py --llm-model gpt-oss:20b-cloud
 # Wait for "Graph built and saved successfully", then exit.
 
 # Step 2: Switch to a small local model for queries (fast, low resource)
-# Edit MODEL_NAME = "qwen2.5:3b" in geode_graph.py, then run:
-python geode_graph.py --fast
+python geode_graph.py --llm-model qwen2.5:3b --fast
 ```
 
 This gives you the best of both worlds: a high-quality graph built by a 20B+ model, with fast and lightweight queries on a 3B model. The graph structure (entities, relations, triples) doesn't change when you switch models — only the response generation uses the smaller model.
 
+> **Note:** If you change the embedding model (`--embed-model`), you must delete `storage_graph/` and rebuild. Kwipu will detect the mismatch and warn you.
+
 ## Roadmap
 
-- **Telegram Bot** — Query your Obsidian vault or knowledge base from anywhere via Telegram. Ask questions on the go and get answers grounded in your notes.
+- **Telegram Bot** — Query your Obsidian vault or knowledge base from anywhere via Telegram
 
 ## License
 
