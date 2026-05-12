@@ -198,6 +198,7 @@ pip install -r requirements.txt
 
 **Areas where help is needed:**
 
+- **CJK language support** - Looking for help adding Chinese, Japanese, and Korean. Requires word segmentation and language-specific patterns. See [open issues](https://github.com/benmaster82/Kwipu/issues).
 - **Retriever attribution logging** - Log which retriever (vector, BM25, temporal, synonym) contributed context for each answer
 - **Evaluation set** - Build a categorized test suite (exact-source, multi-hop, temporal, negative questions)
 - **Provenance inspector** - Surface the chain: answer claim -> cited note -> extracted entity/edge
