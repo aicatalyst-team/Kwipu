@@ -85,7 +85,7 @@ from lang_config import (
 # ==========================================
 # CONFIGURATION
 # ==========================================
-MODEL_NAME = "Qwen2.5:3b"
+MODEL_NAME = "gpt-oss:20b-cloud"
 EMBED_MODEL = "nomic-embed-text"
 KNOWLEDGE_DIR = "./knowledge_base"
 STORAGE_DIR = "./storage_graph"
@@ -691,6 +691,50 @@ class WritHerGraphRAG:
         finally:
             self._rw_lock.release_write()
 
+    def update_document(self, file_path):
+        """Update a modified document in the graph (delete + re-insert).
+
+        More efficient than a full rebuild for single-file modifications.
+        Falls back to full rebuild if the incremental update fails.
+        """
+        self._rw_lock.acquire_write()
+        try:
+            if not self.index:
+                self._build_index_unlocked()
+                self._retrievers_dirty = True
+                return
+
+            try:
+                # The ref_doc_id is the file path (set by filename_as_id=True)
+                ref_doc_id = file_path
+                safe_print(f"Updating: {os.path.basename(file_path)}...")
+
+                # Step 1: Remove old version from graph
+                self.index.delete_ref_doc(ref_doc_id, delete_from_docstore=True)
+
+                # Step 2: Re-read and insert updated version
+                reader = SimpleDirectoryReader(
+                    input_files=[file_path], filename_as_id=True
+                )
+                docs = reader.load_data()
+                if docs:
+                    enriched_docs, structural_triples = enrich_documents(docs)
+                    for doc in enriched_docs:
+                        self.index.insert(doc)
+                    self._inject_structural_triples(structural_triples)
+
+                self.index.storage_context.persist(persist_dir=STORAGE_DIR)
+                safe_print("Document updated successfully.")
+                self._retrievers_dirty = True
+            except Exception as e:
+                safe_print(
+                    f"Incremental update error: {e}. Full rebuild..."
+                )
+                self._build_index_unlocked()
+                self._retrievers_dirty = True
+        finally:
+            self._rw_lock.release_write()
+
     def _inject_structural_triples(self, triples: list[tuple[str, str, str]]):
         """Inject pre-extracted triples into the property graph."""
         if not self.index or not triples:
@@ -1021,18 +1065,27 @@ class FileWatcher(FileSystemEventHandler):
             safe_print("\n(Filesystem events ignored: no real content changes)")
             return
 
-        has_delete_or_modify = any(
-            etype in ("deleted", "modified") for etype, _ in real_events.values()
-        )
+        # Separate events by type
+        deleted = [p for p, (e, _) in real_events.items() if e == "deleted"]
+        modified = [p for p, (e, _) in real_events.items() if e == "modified"]
+        created = [p for p, (e, _) in real_events.items() if e == "created"]
 
-        if has_delete_or_modify:
-            safe_print(f"\nDetected {len(real_events)} real changes. Rebuilding graph...")
+        # Deletions require full rebuild (can't selectively remove all related triples)
+        if deleted:
+            safe_print(f"\nFile(s) deleted. Rebuilding graph...")
             self.rag_system.build_index()
-        else:
-            for path, (etype, _) in real_events.items():
-                if etype == "created" and os.path.exists(path):
-                    safe_print(f"\nNew file detected: {os.path.basename(path)}.")
-                    self.rag_system.insert_document(path)
+            return
+
+        # Modifications: incremental update (delete + re-insert per file)
+        for path in modified:
+            if os.path.exists(path):
+                self.rag_system.update_document(path)
+
+        # Creations: incremental insert
+        for path in created:
+            if os.path.exists(path):
+                safe_print(f"\nNew file detected: {os.path.basename(path)}.")
+                self.rag_system.insert_document(path)
 
     def on_created(self, event):
         if not event.is_directory and self._is_relevant_file(event.src_path):

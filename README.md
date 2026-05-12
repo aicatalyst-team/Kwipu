@@ -25,6 +25,7 @@ Built for [Obsidian](https://obsidian.md/) vaults but works with any folder of m
   - BM25 keyword scoring
   - Temporal/metadata matching
 - **Real-time sync** - watches your folder for changes and updates the graph incrementally
+- **Incremental updates** - modified files are updated in-place (delete + re-insert) without rebuilding the entire graph
 - **Anti-hallucination prompt** - strict instructions to cite sources and avoid inventing facts
 - **Fully local** - runs on Ollama, no data leaves your machine
 - **Startup checks** - verifies Ollama is running and models are available before starting
@@ -147,7 +148,7 @@ First-time graph construction requires an LLM call for each document chunk. Subs
 | 100   | ~40 min  | ~3 hrs   | ~1.5 hrs |
 | 500+  | ~3 hrs   | Not recommended | Not recommended |
 
-Adding a single new file is incremental (~20-60s) and does not rebuild the full graph.
+Adding a single new file is incremental (~20-60s) and does not rebuild the full graph. Modifying an existing file also uses incremental update (delete + re-insert). Only file deletion triggers a full rebuild.
 
 ## Resource Usage
 
