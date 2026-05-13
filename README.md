@@ -6,6 +6,8 @@
 [![LlamaIndex](https://img.shields.io/badge/framework-LlamaIndex-purple.svg)](https://www.llamaindex.ai/)
 [![Obsidian Compatible](https://img.shields.io/badge/Obsidian-compatible-7C3AED.svg)](https://obsidian.md/)
 
+[中文文档](README.zh-CN.md)
+
 A local Graph RAG system that turns your markdown notes into a queryable knowledge graph. Ask questions in natural language and get answers that connect information across multiple files.
 
 Built for [Obsidian](https://obsidian.md/) vaults but works with any folder of markdown files.
