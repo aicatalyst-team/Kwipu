@@ -12,6 +12,7 @@
 
 ## 核心特性
 
+* **MCP 服务器** — 可作为 Claude Desktop、Cursor、Windsurf 等 AI 代理的工具使用，所有处理通过 Ollama 在本地完成
 * **Property Graph 索引** — 使用 LLM 抽取关系，从你的笔记构建知识图谱
 * **Obsidian 原生支持** — 自动解析 `[[wikilinks]]` 和 YAML frontmatter，转化为结构化的图三元组
 * **多语言** — 支持意大利语、英语、法语、德语、西班牙语、葡萄牙语（自动识别）
@@ -21,6 +22,7 @@
   + BM25 关键词打分
   + 时间/元数据匹配
 * **实时同步** — 监听笔记文件夹变化，自动增量更新图索引
+* **增量更新** — 修改笔记后无需重建整个图，单文件秒级更新
 * **反幻觉提示词** — 严格要求引用来源，避免编造事实
 * **完全本地** — 基于 Ollama 运行，数据绝不离开本机
 
@@ -47,6 +49,25 @@ ollama pull nomic-embed-text
 ```python
 MODEL_NAME = "llama3.1:8b"  # 或 Ollama 中任意可用的模型
 ```
+
+## MCP 服务器（Claude Desktop、Cursor、Windsurf）
+
+Kwipu 可以作为 MCP 服务器运行，让 AI 代理直接查询你的知识图谱。所有处理通过 Ollama 在本地完成，最大限度减少客户端 token 消耗。
+
+在 `claude_desktop_config.json`（或对应的 MCP 配置文件）中添加：
+
+```json
+{
+  "mcpServers": {
+    "kwipu": {
+      "command": "C:/path/to/python.exe",
+      "args": ["C:/path/to/kwipu_mcp_server.py"]
+    }
+  }
+}
+```
+
+将路径替换为你实际的 Python 和项目路径。需要 Ollama 正在运行并加载了配置的模型。
 
 ## 使用
 
@@ -98,6 +119,7 @@ python geode_graph.py --fast
 
 ```
 ├── geode_graph.py       # 主程序入口
+├── kwipu_mcp_server.py  # MCP 服务器，用于 AI 代理集成
 ├── lang_config.py       # 多语言配置（停用词、模式、关系）
 ├── requirements.txt     # Python 依赖
 ├── knowledge_base/      # 把你的笔记放在这里
