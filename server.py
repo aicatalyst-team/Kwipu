@@ -15,7 +15,7 @@ import urllib.request
 
 PORT = int(os.environ.get("PORT", "8080"))
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-KNOWLEDGE_DIR = os.environ.get("KNOWLEDGE_DIR", "./knowledge_base/examples")
+KNOWLEDGE_DIR = os.environ.get("KNOWLEDGE_DIR", "./knowledge_base")
 
 # Global state
 graph_rag = None
@@ -43,17 +43,20 @@ def init_graph():
                     return
 
         # Import and initialize
+        import geode_graph as gg
         from geode_graph import WritHerGraphRAG, _init_llm
         
         model_name = os.environ.get("LLM_MODEL", "qwen2.5:1.5b")
         embed_model = os.environ.get("EMBED_MODEL", "nomic-embed-text")
         
+        # Override the global KNOWLEDGE_DIR before initializing
+        gg.KNOWLEDGE_DIR = KNOWLEDGE_DIR
+        
         print(f"Initializing LLM: {model_name}, Embeddings: {embed_model}", flush=True)
         _init_llm(model_name=model_name, embed_model=embed_model)
         
         print(f"Building graph from {KNOWLEDGE_DIR}...", flush=True)
-        graph_rag = WritHerGraphRAG(knowledge_dir=KNOWLEDGE_DIR)
-        graph_rag.load_or_build_index()
+        graph_rag = WritHerGraphRAG(model_name=model_name, embed_model=embed_model)
         
         graph_ready = True
         print("Graph RAG initialized successfully.", flush=True)
