@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kwipu
+  namespace: poc-kwipu
+  labels:
+    app: kwipu
+    autopoc.io/project: kwipu
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kwipu
+  template:
+    metadata:
+      labels:
+        app: kwipu
+    spec:
+      initContainers:
+        - name: ollama-model-pull
+          image: docker.io/ollama/ollama:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Start Ollama server in background
+              ollama serve &
+              sleep 5
+              # Pull models
+              echo "Pulling qwen2.5:1.5b..."
+              ollama pull qwen2.5:1.5b
+              echo "Pulling nomic-embed-text..."
+              ollama pull nomic-embed-text
+              echo "Models pulled successfully"
+              # Stop Ollama
+              kill %1 2>/dev/null || true
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+      containers:
+        - name: kwipu
+          image: quay.io/aicatalyst/kwipu:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: OLLAMA_BASE_URL
+              value: "http://localhost:11434"
+            - name: KNOWLEDGE_DIR
+              value: "./knowledge_base/examples"
+            - name: LLM_MODEL
+              value: "qwen2.5:1.5b"
+            - name: EMBED_MODEL
+              value: "nomic-embed-text"
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+        - name: ollama
+          image: docker.io/ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1000m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+      volumes:
+        - name: ollama-data
+          emptyDir:
+            sizeLimit: 5Gi

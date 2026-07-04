@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: poc-kwipu
+  labels:
+    app.kubernetes.io/name: kwipu
+    app.kubernetes.io/managed-by: autopoc
