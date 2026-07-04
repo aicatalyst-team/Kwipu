@@ -96,14 +96,16 @@ WATCHER_VALID_EXTENSIONS = {".md", ".txt", ".pdf", ".docx"}
 logging.basicConfig(level=logging.ERROR)
 
 
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+
 def _init_llm(model_name: str = MODEL_NAME, embed_model: str = EMBED_MODEL):
     """Initialize LLM and embedding model. Called from main() to avoid side effects on import."""
     Settings.llm = Ollama(
         model=model_name,
         request_timeout=300.0,
-        base_url="http://localhost:11434",
+        base_url=OLLAMA_BASE_URL,
     )
-    Settings.embed_model = OllamaEmbedding(model_name=embed_model)
+    Settings.embed_model = OllamaEmbedding(model_name=embed_model, base_url=OLLAMA_BASE_URL)
 
     # Chunking: large chunks to avoid splitting small notes
     Settings.chunk_size = 2048
@@ -1119,7 +1121,7 @@ def _check_ollama_available(model_name: str, embed_model: str):
     import urllib.request
     import json as _json
 
-    base_url = "http://localhost:11434"
+    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 
     # Check if Ollama is running
     try:
